@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coleta de Geolocalização</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; padding: 20px; background: #f8f9fa; color: #333; }
+        .card { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); max-width: 450px; margin: 0 auto; border: 1px solid #dee2e6; }
+        h1 { font-size: 1.2rem; color: #495057; margin-bottom: 25px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
+        
+        /* Botões */
+        button { background: #0d6efd; color: white; border: none; padding: 14px; font-size: 1rem; border-radius: 4px; cursor: pointer; width: 100%; font-weight: 500; margin-bottom: 10px; transition: background 0.2s; }
+        button:hover { background: #0b5ed7; }
+        
+        .btn-outline { background: transparent; border: 1px solid #6c757d; color: #6c757d; }
+        .btn-outline:hover { background: #f8f9fa; color: #495057; }
+        
+        .btn-maps { background: #198754; } /* Verde para Maps */
+        .btn-maps:hover { background: #157347; }
+        
+        /* Painel de Status em Tempo Real */
+        .live-status { background: #e9ecef; padding: 15px; border-radius: 6px; margin-bottom: 20px; text-align: left; border-left: 5px solid #6c757d; transition: all 0.3s; }
+        .live-status.improving { border-left-color: #ffc107; background: #fff3cd; } /* Amarelo quando < 50m */
+        .live-status.good { border-left-color: #198754; background: #d1e7dd; } /* Verde quando pronto */
+        
+        .data-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.9rem; }
+        .data-value { font-family: monospace; font-weight: bold; font-size: 1rem; }
+        
+        .blink { animation: blinker 1.5s linear infinite; color: #0d6efd; font-weight: bold; }
+        @keyframes blinker { 50% { opacity: 0; } }
+
+        #resultArea { display: none; margin-top: 20px; border-top: 1px solid #dee2e6; padding-top: 20px; }
+        .final-coord { font-size: 1.2rem; font-weight: bold; color: #212529; letter-spacing: 0.5px; margin: 15px 0; background: #f1f3f5; padding: 10px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h1>Registro de Local</h1>
+
+    <button id="btnStart" onclick="iniciarCaptura()">📍 Iniciar Captura GPS</button>
+
+    <div id="monitoring" style="display:none;">
+        <div id="statusBox" class="live-status">
+            <div style="font-weight: bold; margin-bottom: 10px;">
+                <span class="blink">●</span> Calibrando Satélite...
+            </div>
+            
+            <div class="data-row">
+                <span>Precisão Atual:</span>
+                <span class="data-value" id="liveAcc">--</span>
+            </div>
+            <div class="data-row">
+                <span>Meta Mínima:</span>
+                <span class="data-value">20 m</span>
+            </div>
+            <p style="font-size: 0.8rem; margin-top:5px; color:#666;">Mantenha o dispositivo parado.</p>
+        </div>
+
+        <button class="btn-outline" onclick="pararManual()">Usar precisão atual (Forçar)</button>
+    </div>
+
+    <div id="resultArea">
+        <div style="color: #198754; font-weight: bold; margin-bottom: 10px;">✅ Captura Realizada com Sucesso</div>
+        
+        <div class="final-coord">
+            <div id="finalLat">--</div>
+            <div id="finalLon">--</div>
+        </div>
+        <div style="font-size: 0.85rem; color: #666; margin-bottom: 20px;">
+            Margem de erro final: <span id="finalAccDisplay">--</span> metros
+        </div>
+
+        <button onclick="copiarDados()">📋 Copiar Coordenadas</button>
+        <button class="btn-maps" onclick="abrirMaps()">🗺️ Abrir no Google Maps</button>
+        <button class="btn-outline" onclick="location.reload()" style="margin-top:15px;">Nova Captura</button>
+    </div>
+</div>
+
+<script>
+    let watchID = null;
+    let latAtual = 0;
+    let lonAtual = 0;
+    let accAtual = 0;
+
+    function iniciarCaptura() {
+        document.getElementById('btnStart').style.display = 'none';
+        document.getElementById('monitoring').style.display = 'block';
+
+        if (!navigator.geolocation) {
+            alert("Seu dispositivo não suporta GPS.");
+            return;
+        }
+
+        const options = {
+            enableHighAccuracy: true,
+            timeout: 25000,
+            maximumAge: 0
+        };
+
+        // watchPosition: Monitora a mudança em tempo real
+        watchID = navigator.geolocation.watchPosition(atualizarTela, tratarErro, options);
+    }
+
+    function atualizarTela(position) {
+        latAtual = position.coords.latitude;
+        lonAtual = position.coords.longitude;
+        accAtual = position.coords.accuracy;
+
+        // Atualiza os números na tela "ao vivo"
+        document.getElementById('liveAcc').innerText = accAtual.toFixed(1) + " m";
+        
+        const box = document.getElementById('statusBox');
+
+        // Lógica Visual de Cores
+        if(accAtual > 50) {
+            box.className = 'live-status'; // Cinza (Ruim)
+        } else if (accAtual > 20) {
+            box.className = 'live-status improving'; // Amarelo (Melhorando)
+        } else {
+            box.className = 'live-status good'; // Verde (Meta atingida)
+            // TRAVA AUTOMATICAMENTE
+            finalizar(latAtual, lonAtual, accAtual);
+        }
+    }
+
+    function finalizar(lat, lon, acc) {
+        // Para o GPS para economizar bateria e travar o número
+        if(watchID !== null) {
+            navigator.geolocation.clearWatch(watchID);
+            watchID = null;
+        }
+
+        document.getElementById('monitoring').style.display = 'none';
+        document.getElementById('resultArea').style.display = 'block';
+
+        document.getElementById('finalLat').innerText = lat;
+        document.getElementById('finalLon').innerText = lon;
+        document.getElementById('finalAccDisplay').innerText = acc.toFixed(1);
+    }
+
+    function pararManual() {
+        if(latAtual !== 0) {
+            finalizar(latAtual, lonAtual, accAtual);
+        } else {
+            alert("Aguarde pelo menos a primeira leitura do satélite.");
+        }
+    }
+
+    function tratarErro(error) {
+        console.warn('ERROR(' + error.code + '): ' + error.message);
+    }
+
+    function copiarDados() {
+        const texto = `${latAtual}, ${lonAtual}`;
+        navigator.clipboard.writeText(texto).then(() => {
+            alert("Coordenadas copiadas para a área de transferência!");
+        });
+    }
+
+    function abrirMaps() {
+        if(latAtual && lonAtual) {
+            const url = `https://www.google.com/maps/search/?api=1&query=${latAtual},${lonAtual}`;
+            window.open(url, '_blank');
+        }
+    }
+</script>
+
+</body>
+</html>
